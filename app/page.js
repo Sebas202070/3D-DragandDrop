@@ -18,8 +18,8 @@ export default function Home() {
 
   const [handLandmarkerLoaded, setHandLandmarkerLoaded] = useState(false); // Estado para saber si el modelo está cargado
   const [images, setImages] = useState([ // Array de imágenes con sus posiciones y estado de 'grabbed'
-    { id: 'img1', src: '/Banana.jpg', x: 100, y: 100, grabbed: false },
-    { id: 'img2', src: '/Frutilla.jpg', x: 300, y: 150, grabbed: false },
+    { id: 'img1', src: '/Banana.png', x: 100, y: 100, grabbed: false },
+    { id: 'img2', src: '/Frutilla.png', x: 300, y: 150, grabbed: false },
     { id: 'img3', src: '/Sandia.png', x: 200, y: 300, grabbed: false },
   ]);
   const [grabbingHandIndex, setGrabbingHandIndex] = useState(null); // Guarda el índice de la mano que está agarrando (0 o 1)
