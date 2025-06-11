@@ -22,6 +22,11 @@ export default function Home() {
     { id: 'img2', src: '/Frutilla.png', x: 300, y: 150, grabbed: false },
     { id: 'img3', src: '/Sandia.png', x: 200, y: 300, grabbed: false },
   ]);
+  const imagesRef = useRef(images);
+
+useEffect(() => {
+  imagesRef.current = images;
+}, [images]);
   const [grabbingHandIndex, setGrabbingHandIndex] = useState(null); // Guarda el índice de la mano que está agarrando (0 o 1)
   const [initialGrabOffset, setInitialGrabOffset] = useState({ x: 0, y: 0 }); // Offset entre la pinza y la imagen al agarrar
 
@@ -77,145 +82,121 @@ export default function Home() {
   }, []);
 
   // --- 3. Lógica principal: Detección de Pinza y Arrastre de Imágenes ---
-  const detectPinchAndDrag = useCallback((results) => {
-    const video = webcamRef.current.video;
-    if (!video || !results || !results.landmarks || results.landmarks.length === 0) {
-      // Si no hay manos detectadas o los resultados son nulos, soltar cualquier imagen agarrada
-      setImages(prevImages => prevImages.map(img => ({ ...img, grabbed: false })));
-      setGrabbingHandIndex(null); // Reiniciar la mano que agarra
-      return;
+ const detectPinchAndDrag = useCallback((results) => {
+  const video = webcamRef.current.video;
+  if (!video || !results?.landmarks?.length) {
+    imagesRef.current.forEach(img => (img.grabbed = false));
+    setGrabbingHandIndex(null);
+    return;
+  }
+
+  const currentGrabbingHand = grabbingHandIndex;
+  let newGrabbingHandIndex = null;
+  let newHandPosition = null;
+
+  results.landmarks.forEach((handLandmarks, handIndex) => {
+    const thumbTip = handLandmarks[4];
+    const indexTip = handLandmarks[8];
+    const distance = Math.sqrt(
+      (thumbTip.x - indexTip.x) ** 2 +
+      (thumbTip.y - indexTip.y) ** 2 +
+      (thumbTip.z - indexTip.z) ** 2
+    );
+
+    const handX = (1 - indexTip.x) * video.videoWidth;
+    const handY = indexTip.y * video.videoHeight;
+
+    if (distance < PINCH_THRESHOLD) {
+      newGrabbingHandIndex = handIndex;
+      newHandPosition = { x: handX, y: handY };
     }
+  });
 
-    const currentGrabbingHand = grabbingHandIndex; // Índice de la mano que actualmente está agarrando
-    let newGrabbingHandIndex = null; // Índice de la mano que se detecta haciendo pinza en este frame
-    let newHandPosition = null; // Posición de la pinza (punta del índice)
+  const updatedImages = [...imagesRef.current];
 
-    // Iterar sobre cada mano detectada por MediaPipe
-    results.landmarks.forEach((handLandmarks, handIndex) => {
-      // Puntos clave para la pinza: punta del pulgar (4) y punta del índice (8)
-      const thumbTip = handLandmarks[4];
-      const indexTip = handLandmarks[8];
+  if (newGrabbingHandIndex !== null && currentGrabbingHand === null) {
+    const grabbedIndex = updatedImages.findIndex(img =>
+      newHandPosition.x > img.x &&
+      newHandPosition.x < img.x + 80 &&
+      newHandPosition.y > img.y &&
+      newHandPosition.y < img.y + 80
+    );
 
-      // Calcular la distancia euclidiana 3D entre el pulgar y el índice
-      // (considerando x, y, z para mayor precisión del gesto de pinza)
-      const distance = Math.sqrt(
-        Math.pow(thumbTip.x - indexTip.x, 2) +
-        Math.pow(thumbTip.y - indexTip.y, 2) +
-        Math.pow(thumbTip.z - indexTip.z, 2)
-      );
-
-      // Convertir las coordenadas normalizadas (0-1) a píxeles de la resolución del video
-     const handX = (1 - indexTip.x) * video.videoWidth; // 👈 Invertimos el eje X
-
-      const handY = indexTip.y * video.videoHeight;
-
-      if (distance < PINCH_THRESHOLD) { // Si la distancia es menor al umbral, ¡se detectó una pinza!
-        console.log(`Pinza detectada en mano ${handIndex}. Distancia: ${distance.toFixed(3)}`);
-        newGrabbingHandIndex = handIndex; // Registrar esta mano como la que hace la pinza
-        newHandPosition = { x: handX, y: handY }; // Registrar su posición
-      }
-    });
-
-    // Actualizar el estado de las imágenes (grabbed o no grabbed, y posición)
-    setImages(prevImages => {
-      // Crear una copia profunda del array de imágenes para evitar mutaciones directas en el estado
-      const updatedImages = prevImages.map(img => ({ ...img }));
-
-      // --- Lógica para INICIAR el AGARRE ---
-      if (newGrabbingHandIndex !== null && currentGrabbingHand === null) {
-        // Se detectó una nueva pinza Y ninguna imagen estaba siendo agarrada previamente
-        const grabbedImageIndex = updatedImages.findIndex(img =>
-          newHandPosition.x > img.x &&
-newHandPosition.x < img.x + 80 &&
-newHandPosition.y > img.y &&
-newHandPosition.y < img.y + 80
-  // 150 es el alto de las imágenes placeholder
-        );
-
-        if (grabbedImageIndex !== -1) { // Si la pinza está sobre una imagen
-          updatedImages[grabbedImageIndex].grabbed = true; // Marcar esa imagen como agarrada
-          setGrabbingHandIndex(newGrabbingHandIndex); // Registrar qué mano la agarró
-          // Calcular el offset inicial: la diferencia entre la posición de la pinza y la esquina superior izquierda de la imagen
-          setInitialGrabOffset({
-            x: newHandPosition.x - updatedImages[grabbedImageIndex].x,
-            y: newHandPosition.y - updatedImages[grabbedImageIndex].y,
-          });
-          console.log(`Imagen ${updatedImages[grabbedImageIndex].id} agarrada por mano ${newGrabbingHandIndex}`);
-        }
-      }
-      // --- Lógica para ARRASTRAR (mover) la imagen ---
-      else if (newGrabbingHandIndex !== null && currentGrabbingHand === newGrabbingHandIndex) {
-        // La misma mano que inició el agarre sigue haciendo pinza, mover la imagen
-        const grabbedImageIndex = updatedImages.findIndex(img => img.grabbed);
-        if (grabbedImageIndex !== -1) {
-          // Mover la imagen basándose en la nueva posición de la pinza y el offset inicial
-          updatedImages[grabbedImageIndex].x = newHandPosition.x - initialGrabOffset.x;
-          updatedImages[grabbedImageIndex].y = newHandPosition.y - initialGrabOffset.y;
-        }
-      }
-      // --- Lógica para SOLTAR la imagen ---
-      else if (newGrabbingHandIndex === null && currentGrabbingHand !== null) {
-        // No se detecta pinza, pero una imagen estaba siendo agarrada, entonces se suelta
-        const grabbedImageIndex = updatedImages.findIndex(img => img.grabbed);
-        if (grabbedImageIndex !== -1) {
-          updatedImages[grabbedImageIndex].grabbed = false; // Marcar imagen como no agarrada
-          console.log(`Imagen ${updatedImages[grabbedImageIndex].id} soltada.`);
-        }
-        setGrabbingHandIndex(null); // Reiniciar la mano que agarraba
-        setInitialGrabOffset({ x: 0, y: 0 }); // Reiniciar el offset
-      }
-
-      return updatedImages; // Devolver el estado actualizado de las imágenes
-    });
-
-  }, [grabbingHandIndex, initialGrabOffset]); // Dependencias del useCallback
-
-  // --- 4. Bucle principal de detección de video (requestAnimationFrame) ---
-  const predictWebcam = useCallback(async () => {
-    // Solo ejecutar si el modelo está cargado, la webcam está lista y la video está disponible
-    if (handLandmarkerRef.current && webcamRef.current && webcamRef.current.video && handLandmarkerLoaded) {
-      const video = webcamRef.current.video;
-      // Detectar landmarks de mano en el frame actual del video
-      const results = handLandmarkerRef.current.detectForVideo(video, performance.now());
-
-      // Dibujar los landmarks si el canvas está disponible
-      if (canvasRef.current) {
-        drawLandmarks(results.landmarks, canvasRef.current, video);
-      }
-
-      // Ejecutar la lógica de detección de pinza y arrastre
-      detectPinchAndDrag(results);
+    if (grabbedIndex !== -1) {
+      updatedImages[grabbedIndex].grabbed = true;
+      setGrabbingHandIndex(newGrabbingHandIndex);
+      setInitialGrabOffset({
+        x: newHandPosition.x - updatedImages[grabbedIndex].x,
+        y: newHandPosition.y - updatedImages[grabbedIndex].y,
+      });
     }
-    // Continuar el bucle en el próximo frame
+  } else if (newGrabbingHandIndex !== null && currentGrabbingHand === newGrabbingHandIndex) {
+    const grabbedIndex = updatedImages.findIndex(img => img.grabbed);
+    if (grabbedIndex !== -1) {
+      updatedImages[grabbedIndex].x = newHandPosition.x - initialGrabOffset.x;
+      updatedImages[grabbedIndex].y = newHandPosition.y - initialGrabOffset.y;
+    }
+  } else if (newGrabbingHandIndex === null && currentGrabbingHand !== null) {
+    const grabbedIndex = updatedImages.findIndex(img => img.grabbed);
+    if (grabbedIndex !== -1) {
+      updatedImages[grabbedIndex].grabbed = false;
+    }
+    setGrabbingHandIndex(null);
+    setInitialGrabOffset({ x: 0, y: 0 });
+  }
+
+  // Actualizar solo una vez (opcional: puedes hacerlo con debounce si aún hay lag)
+  imagesRef.current = updatedImages;
+  setImages(updatedImages); // Solo 1 render por frame (en lugar de 3 o más)
+}, [grabbingHandIndex, initialGrabOffset]);
+
+const lastInferenceTime = useRef(0);
+
+const predictWebcam = useCallback(async () => {
+  const now = performance.now();
+  if (now - lastInferenceTime.current < 50) { // 20 FPS
     animationFrameId.current = requestAnimationFrame(predictWebcam);
-  }, [handLandmarkerLoaded, drawLandmarks, detectPinchAndDrag]);
+    return;
+  }
+  lastInferenceTime.current = now;
 
-  // Iniciar y limpiar el bucle de detección de video
-  useEffect(() => {
-    if (webcamRef.current && webcamRef.current.video && handLandmarkerLoaded) {
-      const video = webcamRef.current.video;
-      // Esperar a que el video esté completamente cargado y listo para ser reproducido
-      const checkIfVideoReady = () => {
-        if (video.readyState === 4) { // readyState 4 significa 'HAVE_ENOUGH_DATA'
-          if (animationFrameId.current) {
-            cancelAnimationFrame(animationFrameId.current); // Limpiar cualquier bucle anterior
-          }
-          predictWebcam(); // Iniciar el bucle de predicción
-        } else {
-          setTimeout(checkIfVideoReady, 100); // Reintentar en 100ms si no está listo
-        }
-      };
-      checkIfVideoReady();
+  if (handLandmarkerRef.current && webcamRef.current && webcamRef.current.video && handLandmarkerLoaded) {
+    const video = webcamRef.current.video;
+    const results = handLandmarkerRef.current.detectForVideo(video, now);
+
+
+    if (canvasRef.current) {
+      drawLandmarks(results.landmarks, canvasRef.current, video);
     }
-    // Función de limpieza para cancelar el requestAnimationFrame cuando el componente se desmonte
-    return () => {
-      if (animationFrameId.current) {
-        cancelAnimationFrame(animationFrameId.current);
+
+    detectPinchAndDrag(results);
+  }
+
+  animationFrameId.current = requestAnimationFrame(predictWebcam);
+}, [handLandmarkerLoaded, drawLandmarks, detectPinchAndDrag]);
+useEffect(() => {
+  if (webcamRef.current && webcamRef.current.video && handLandmarkerLoaded) {
+    const video = webcamRef.current.video;
+
+    const checkIfVideoReady = () => {
+      if (video.readyState === 4) {
+        if (animationFrameId.current) {
+          cancelAnimationFrame(animationFrameId.current);
+        }
+        predictWebcam(); // ✅ Asegúrate que esto se llama
+      } else {
+        setTimeout(checkIfVideoReady, 100);
       }
     };
-  }, [webcamRef, handLandmarkerLoaded, predictWebcam]);
+    checkIfVideoReady();
+  }
 
-
+  return () => {
+    if (animationFrameId.current) {
+      cancelAnimationFrame(animationFrameId.current);
+    }
+  };
+}, [webcamRef, handLandmarkerLoaded, predictWebcam]);
   // --- UI del componente ---
   if (!handLandmarkerLoaded) {
     return <div className="flex items-center justify-center min-h-screen text-xl">Cargando modelo de detección de manos...</div>;
@@ -256,12 +237,13 @@ newHandPosition.y < img.y + 80
   src={img.src}
   alt={img.id}
   className={`absolute cursor-grab ${img.grabbed ? 'border-4 border-green-500 shadow-lg' : ''}`}
-  style={{
-    left: img.x,
-    top: img.y,
-    width: '80px',     // Tamaño reducido
-    height: '80px',    // Tamaño reducido
-  }}
+ style={{
+  transform: `translate3d(${img.x}px, ${img.y}px, 0)`,
+  width: '80px',
+  height: '80px',
+  willChange: 'transform', // Mejora rendimiento
+}}
+
 />
 
         ))}
